@@ -94,7 +94,9 @@ calc_post_rcpp(const arma::mat & b_mat,
                const arma::mat & posterior_weights,
                bool              common_cov,
                int               report_type,
-               int               n_thread = 1)
+               int               n_thread = 1,
+               int               n_samples = 0,
+               int               seed = 123)
 {
 	// hide armadillo warning / error messages
 
@@ -104,14 +106,21 @@ calc_post_rcpp(const arma::mat & b_mat,
 		cube U_cube(U_3d.begin(), dimU[0], dimU[1], dimU[2], false, true, false);
 		PosteriorMASH pc(b_mat, s_mat, s_alpha_mat, s_orig_mat, v_mat, l_mat, a_mat, U_cube);
 		pc.set_thread(n_thread);
-		if (!common_cov) pc.compute_posterior(posterior_weights, report_type);
-		else pc.compute_posterior_comcov(posterior_weights, report_type);
-		return List::create(
+		if (!common_cov) pc.compute_posterior(posterior_weights, report_type, n_samples, seed);
+		else pc.compute_posterior_comcov(posterior_weights, report_type, n_samples, seed);
+
+		List result = List::create(
 			Named("post_mean") = pc.PosteriorMean(),
 			Named("post_sd")   = pc.PosteriorSD(),
 			Named("post_cov")  = pc.PosteriorCov(),
 			Named("post_zero") = pc.ZeroProb(),
 			Named("post_neg")  = pc.NegativeProb());
+
+		if (n_samples > 0) {
+			result.push_back(pc.PosteriorSamples(), "post_samples");
+		}
+
+		return result;
 	} else {
 		// U_3d is in fact a vector
 		PosteriorASH pc(vectorise(b_mat),

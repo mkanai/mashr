@@ -131,7 +131,7 @@ posterior_mean_matrix <- function(Bhat, Vinv, U1){
 compute_posterior_matrices <-
   function (data, Ulist, posterior_weights,
             algorithm.version = c("Rcpp","R"), A=NULL,
-            output_posterior_cov = FALSE, 
+            output_posterior_cov = FALSE,
             mc.cores = 1,
             posterior_samples = 0, seed = 123) {
   algorithm.version <- match.arg(algorithm.version)
@@ -186,9 +186,6 @@ compute_posterior_matrices <-
                                            posterior_samples = posterior_samples, seed=seed)
     }
   } else if (algorithm.version == "Rcpp") {
-    if(posterior_samples > 0){
-      stop('The sampling method is not implemented in C++. Please use option algorithm = "R".')
-    }
     if(!data$commonV){
       stop('effect specific V has not implemented in Rcpp')
     }
@@ -198,12 +195,12 @@ compute_posterior_matrices <-
       res <- calc_post_rcpp(t(data$Bhat), t(data$Shat), t(data$Shat_alpha), matrix(0,0,0),
                            data$V, matrix(0,0,0), A,
                            simplify2array(Ulist), t(posterior_weights),
-                           is_common_cov, output_type, mc.cores)
+                           is_common_cov, output_type, mc.cores, posterior_samples, seed)
     else
       res <- calc_post_rcpp(t(data$Bhat), t(data$Shat), t(data$Shat_alpha), t(data$Shat_orig),
                            data$V, data$L, A,
                            simplify2array(Ulist), t(posterior_weights),
-                           is_common_cov, output_type, mc.cores)
+                           is_common_cov, output_type, mc.cores, posterior_samples, seed)
     lfsr <- compute_lfsr(res$post_neg, res$post_zero)
     posterior_matrices <- list(PosteriorMean = res$post_mean,
                               PosteriorSD   = res$post_sd,
@@ -213,6 +210,12 @@ compute_posterior_matrices <-
 
     if (output_posterior_cov) {
       posterior_matrices$PosteriorCov <- res$post_cov
+    }
+
+    if (posterior_samples > 0) {
+      # Rcpp already returns samples in J x Q x M format
+      dimnames(res$post_samples) <- list(rownames(data$Bhat), rownames(A), paste0("sample_", 1:posterior_samples))
+      posterior_matrices$PosteriorSamples <- res$post_samples
     }
   } else {
     stop("Algorithm version should be either \"R\" or \"Rcpp\"")
@@ -252,25 +255,25 @@ compute_posterior_weights <- function(pi, lik_mat) {
 }
 
 #' @title Condition-wise Posterior Summary
-#' 
+#'
 #' @description Provide condition-wise summary based on posterior
 #'   distributions for each effect.
-#' 
+#'
 #' @param mash_data A mash data object, e.g. as created by \code{mash_set_data}
-#' 
+#'
 #' @param m A mash fit, typically an output from \code{\link{mash}}.
-#' 
+#'
 #' @param contrast_mat A matrix applied to mashr fitting result,
 #'   enabling comparisons for different conditions based on posteior
 #'   distributions.
 #'
 #' @return
 #' See \code{\link{compute_posterior_matrices_common_cov_R}}.
-#' 
+#'
 #' @export
-#' 
+#'
 #' @examples
-#' 
+#'
 #' # The following example performs pairwise comparisons in a data set
 #' # with 5 conditions: that is, it compares conditions (column) 1 and
 #' # 2, 1 and 3, 1 and 4, 1 and 5, 2 and 3, etc.

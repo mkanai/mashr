@@ -4,6 +4,7 @@
 #include <cmath>
 #include <armadillo>
 #include <iostream>
+#include <random>
 #ifdef _OPENMP
 # include <omp.h>
 #endif
@@ -281,7 +282,10 @@ mash_compute_posterior(const mat& b_mat, const SE& s_obj,
                        mat& post_var, mat& neg_prob,
                        mat& zero_prob, cube& post_cov,
                        const mat& posterior_weights,
-                       const int& report_type);
+                       const int& report_type,
+                       cube& post_samples = *(new cube()),
+                       const int& n_samples = 0,
+                       const int& seed = 123);
 
 int
 mash_compute_posterior_comcov(const mat&   b_mat,
@@ -298,7 +302,10 @@ mash_compute_posterior_comcov(const mat&   b_mat,
                               mat &        zero_prob,
                               cube &       post_cov,
                               const mat &  posterior_weights,
-                              const int &  report_type);
+                              const int &  report_type,
+                              cube &       post_samples = *(new cube()),
+                              const int &  n_samples = 0,
+                              const int &  seed = 123);
 
 int
 mvsermix_compute_posterior(const mat&  b_mat,
@@ -387,27 +394,34 @@ PosteriorMASH(const mat &  b_mat,
 // @description More detailed description of function goes here.
 // @param posterior_weights P X J matrix, the posterior probabilities of each mixture component for each effect
 // @param report_type an integer: 1 for posterior mean only, 2 for posterior second moment, 3 for default mash output, 4 for additionally posterior covariance
+// @param n_samples number of posterior samples to draw
+// @param seed random seed for sampling
 int
-compute_posterior(const mat & posterior_weights, const int & report_type)
+compute_posterior(const mat & posterior_weights, const int & report_type,
+                  const int & n_samples = 0, const int & seed = 123)
 {
 	return mash_compute_posterior(b_mat, s_obj, v_mat, l_mat, a_mat, U_cube,
 	                              Vinv_cube, U0_cube, post_mean, post_var,
 	                              neg_prob, zero_prob, post_cov,
-	                              posterior_weights, report_type);
+	                              posterior_weights, report_type,
+	                              post_samples, n_samples, seed);
 }
 
 // @title Compute posterior matrices when covariance SVS is the same for all J conditions
 // @description More detailed description of function goes here.
 // @param posterior_weights P X J matrix, the posterior probabilities of each mixture component for each effect
 // @param report_type an integer: 1 for posterior mean only, 2 for posterior second moment, 3 for default mash output, 4 for additionally posterior covariance
+// @param n_samples number of posterior samples to draw
+// @param seed random seed for sampling
 int
-compute_posterior_comcov(const mat & posterior_weights, const int & report_type)
+compute_posterior_comcov(const mat & posterior_weights, const int & report_type,
+                         const int & n_samples = 0, const int & seed = 123)
 {
 	return mash_compute_posterior_comcov(b_mat, s_obj, v_mat, l_mat, a_mat,
 	                                     U_cube, Vinv_cube, U0_cube, post_mean,
 	                                     post_var, neg_prob, zero_prob,
 	                                     post_cov, posterior_weights,
-	                                     report_type);
+	                                     report_type, post_samples, n_samples, seed);
 }     // compute_posterior_comcov
 
 // initializing some optinally precomputed quantities
@@ -463,6 +477,11 @@ ZeroProb() {
 	return zero_prob.t();
 }
 
+const cube &
+PosteriorSamples() const {
+	return post_samples;
+}
+
 private:
 // input
 mat b_mat;
@@ -481,6 +500,8 @@ mat neg_prob;
 mat zero_prob;
 // J X R X R cube
 cube post_cov;
+// J X Q X M cube
+cube post_samples;
 };
 
 // POSTERIORASH CLASS
@@ -1037,10 +1058,23 @@ mash_compute_posterior(const mat& b_mat, const SE& s_obj,
                        mat& post_var, mat& neg_prob,
                        mat& zero_prob, cube& post_cov,
                        const mat& posterior_weights,
-                       const int& report_type)
+                       const int& report_type,
+                       cube& post_samples,
+                       const int& n_samples,
+                       const int& seed)
 {
 	vec mean(post_mean.n_rows);
 	mean.fill(0);
+
+	// If sampling is requested, initialize the samples cube and RNG
+	std::mt19937 main_rng;
+	if (n_samples > 0) {
+		int Q = a_mat.is_empty() ? post_mean.n_rows : a_mat.n_rows;
+		post_samples.set_size(post_mean.n_cols, Q, n_samples);
+		post_samples.zeros();
+		// Initialize main RNG with seed
+		main_rng.seed(seed);
+	}
 
     #pragma \
 	omp parallel for schedule(static) default(none) shared(posterior_weights, report_type, mean, post_mean, post_var, neg_prob, zero_prob, post_cov, b_mat, s_obj, l_mat, v_mat, a_mat, U_cube, Vinv_cube, U0_cube)
@@ -1107,6 +1141,100 @@ mash_compute_posterior(const mat& b_mat, const SE& s_obj,
 	}
 	post_var -= pow(post_mean, 2.0);
 
+	// Sample from posterior if requested
+	if (n_samples > 0) {
+		std::uniform_real_distribution<double> unif(0.0, 1.0);
+		std::normal_distribution<double> norm(0.0, 1.0);
+
+		for (uword j = 0; j < post_mean.n_cols; ++j) {
+			mat Vinv_j;
+			if (Vinv_cube.is_empty())
+				Vinv_j = inv_sympd(get_cov(s_obj.get_original().col(j), v_mat, l_mat));
+			else
+				Vinv_j = Vinv_cube.slice(j);
+
+			// First sample which mixture components
+			vec probs = posterior_weights.col(j);
+			uvec component_counts(U_cube.n_slices, arma::fill::zeros);
+
+			// Sample n_samples mixture components using multinomial
+			for (int s = 0; s < n_samples; ++s) {
+				double u = unif(main_rng);
+				double cumsum = 0.0;
+				for (uword p = 0; p < probs.n_elem; ++p) {
+					cumsum += probs(p);
+					if (u <= cumsum) {
+						component_counts(p)++;
+						break;
+					}
+				}
+			}
+
+			// Now sample from each component
+			int sample_idx = 0;
+			for (uword p = 0; p < U_cube.n_slices; ++p) {
+				if (component_counts(p) > 0) {
+					// Get posterior parameters for this component
+					mat U1(post_mean.n_rows, post_mean.n_rows);
+					mat U0;
+					U1.fill(0);
+
+					if (U0_cube.is_empty())
+						U0 = get_posterior_cov(Vinv_j, U_cube.slice(p));
+					else
+						U0 = U0_cube.slice(j * U_cube.n_slices + p);
+
+					vec mu_p;
+					if (a_mat.is_empty()) {
+						mu_p = get_posterior_mean(b_mat.col(j), Vinv_j, U0) % s_obj.get().col(j);
+						U1 = (U0.each_col() % s_obj.get().col(j)).each_row() % s_obj.get().col(j).t();
+					} else {
+						mu_p = a_mat * (get_posterior_mean(b_mat.col(j), Vinv_j, U0) % s_obj.get().col(j));
+						U1 = a_mat * (((U0.each_col() % s_obj.get().col(j)).each_row() % s_obj.get().col(j).t()) * a_mat.t());
+					}
+
+					// Sample from multivariate normal
+					mat cholU1;
+					bool chol_success = chol(cholU1, U1);
+					if (chol_success) {
+						for (uword s = 0; s < component_counts(p); ++s) {
+							vec z(mu_p.n_elem);
+							for (uword i = 0; i < mu_p.n_elem; ++i) {
+								z(i) = norm(main_rng);
+							}
+							vec sample = mu_p + cholU1.t() * z;
+							for (uword q = 0; q < mu_p.n_elem; ++q) {
+								post_samples(j, q, sample_idx) = sample(q);
+							}
+							sample_idx++;
+						}
+					} else {
+						// If Cholesky fails, just use the mean
+						for (uword s = 0; s < component_counts(p); ++s) {
+							for (uword q = 0; q < mu_p.n_elem; ++q) {
+								post_samples(j, q, sample_idx) = mu_p(q);
+							}
+							sample_idx++;
+						}
+					}
+				}
+			}
+
+			// Shuffle the samples for this effect
+			for (int i = n_samples - 1; i > 0; --i) {
+				std::uniform_int_distribution<int> dist(0, i);
+				int k = dist(main_rng);
+				if (k != i) {
+					for (uword q = 0; q < post_samples.n_cols; ++q) {
+						double temp = post_samples(j, q, i);
+						post_samples(j, q, i) = post_samples(j, q, k);
+						post_samples(j, q, k) = temp;
+					}
+				}
+			}
+		}
+	}
+
 	return 0;
 } // mash_compute_posterior
 
@@ -1127,7 +1255,10 @@ mash_compute_posterior_comcov(const mat&   b_mat,
                               mat &        zero_prob,
                               cube &       post_cov,
                               const mat &  posterior_weights,
-                              const int &  report_type)
+                              const int &  report_type,
+                              cube &       post_samples,
+                              const int &  n_samples,
+                              const int &  seed)
 {
 	mat mean(post_mean.n_rows, post_mean.n_cols);
 	mean.fill(0);
@@ -1145,8 +1276,24 @@ mash_compute_posterior_comcov(const mat&   b_mat,
 	ones.fill(1);
 	zeros.fill(0);
 
+	// If sampling is requested, initialize the samples cube and RNG
+	std::mt19937 main_rng;
+	if (n_samples > 0) {
+		int Q = a_mat.is_empty() ? post_mean.n_rows : a_mat.n_rows;
+		post_samples.set_size(post_mean.n_cols, Q, n_samples);
+		post_samples.zeros();
+		// Initialize main RNG with seed
+		main_rng.seed(seed);
+	}
+
+	// Store components for sampling (will be computed in parallel loop)
+	cube mu_samples(post_mean.n_rows, post_mean.n_cols, U_cube.n_slices);
+	cube cov_samples(post_mean.n_rows, post_mean.n_rows, U_cube.n_slices);
+	mu_samples.zeros();
+	cov_samples.zeros();
+
     #pragma \
-	omp parallel for schedule(static) default(none) shared(posterior_weights, report_type, mean, Vinv, ones, zeros, post_mean, post_var, neg_prob, zero_prob, post_cov, b_mat, s_obj, a_mat, U_cube, U0_cube)
+	omp parallel for schedule(static) default(none) shared(mu_samples, cov_samples, posterior_weights, report_type, mean, Vinv, ones, zeros, post_mean, post_var, neg_prob, zero_prob, post_cov, b_mat, s_obj, a_mat, U_cube, U0_cube, n_samples)
 	for (uword p = 0; p < U_cube.n_slices; ++p) {
 		mat zero_mat(post_mean.n_rows, post_mean.n_cols);
 		// R X R
@@ -1185,6 +1332,12 @@ mash_compute_posterior_comcov(const mat&   b_mat,
 				neg_mat.row(r)  = zeros;
 			}
 		}
+		// Store parameters for sampling
+		if (n_samples > 0) {
+			mu_samples.slice(p) = mu1_mat;
+			cov_samples.slice(p) = U1;
+		}
+
 		// compute weighted means of posterior arrays
 	#pragma omp critical
 		{
@@ -1201,6 +1354,80 @@ mash_compute_posterior_comcov(const mat&   b_mat,
 		}
 	}
 	post_var -= pow(post_mean, 2.0);
+
+	// Generate samples if requested
+	if (n_samples > 0) {
+		std::uniform_real_distribution<double> unif(0.0, 1.0);
+		std::normal_distribution<double> norm(0.0, 1.0);
+
+		// For each effect j
+		for (uword j = 0; j < post_mean.n_cols; ++j) {
+			// First sample which mixture components
+			vec probs = posterior_weights.col(j);
+			uvec component_counts(U_cube.n_slices, arma::fill::zeros);
+
+			// Sample n_samples mixture components using multinomial
+			for (int s = 0; s < n_samples; ++s) {
+				double u = unif(main_rng);
+				double cumsum = 0.0;
+				for (uword p = 0; p < probs.n_elem; ++p) {
+					cumsum += probs(p);
+					if (u <= cumsum) {
+						component_counts(p)++;
+						break;
+					}
+				}
+			}
+
+			// Now sample from each component
+			int sample_idx = 0;
+			for (uword p = 0; p < U_cube.n_slices; ++p) {
+				if (component_counts(p) > 0) {
+					vec mu_p = mu_samples.slice(p).col(j);
+					mat U1 = cov_samples.slice(p);
+
+					// Sample from multivariate normal
+					mat cholU1;
+					bool chol_success = chol(cholU1, U1);
+					if (chol_success) {
+						for (uword s = 0; s < component_counts(p); ++s) {
+							vec z(mu_p.n_elem);
+							for (uword i = 0; i < mu_p.n_elem; ++i) {
+								z(i) = norm(main_rng);
+							}
+							vec sample = mu_p + cholU1.t() * z;
+							for (uword q = 0; q < mu_p.n_elem; ++q) {
+								post_samples(j, q, sample_idx) = sample(q);
+							}
+							sample_idx++;
+						}
+					} else {
+						// If Cholesky fails, just use the mean
+						for (uword s = 0; s < component_counts(p); ++s) {
+							for (uword q = 0; q < mu_p.n_elem; ++q) {
+								post_samples(j, q, sample_idx) = mu_p(q);
+							}
+							sample_idx++;
+						}
+					}
+				}
+			}
+
+			// Shuffle the samples for this effect
+			for (int i = n_samples - 1; i > 0; --i) {
+				std::uniform_int_distribution<int> dist(0, i);
+				int k = dist(main_rng);
+				if (k != i) {
+					for (uword q = 0; q < post_samples.n_cols; ++q) {
+						double temp = post_samples(j, q, i);
+						post_samples(j, q, i) = post_samples(j, q, k);
+						post_samples(j, q, k) = temp;
+					}
+				}
+			}
+		}
+	}
+
 	//
 	if (report_type == 4) {
 	#pragma omp parallel for schedule(static) default(none) shared(post_cov, post_mean)

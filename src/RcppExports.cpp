@@ -88,8 +88,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // calc_post_rcpp
-List calc_post_rcpp(const arma::mat& b_mat, const arma::mat& s_mat, const arma::mat& s_alpha_mat, const arma::mat& s_orig_mat, const arma::mat& v_mat, const arma::mat& l_mat, const arma::mat& a_mat, NumericVector& U_3d, const arma::mat& posterior_weights, bool common_cov, int report_type, int n_thread);
-RcppExport SEXP _mashr_calc_post_rcpp(SEXP b_matSEXP, SEXP s_matSEXP, SEXP s_alpha_matSEXP, SEXP s_orig_matSEXP, SEXP v_matSEXP, SEXP l_matSEXP, SEXP a_matSEXP, SEXP U_3dSEXP, SEXP posterior_weightsSEXP, SEXP common_covSEXP, SEXP report_typeSEXP, SEXP n_threadSEXP) {
+List calc_post_rcpp(const arma::mat& b_mat, const arma::mat& s_mat, const arma::mat& s_alpha_mat, const arma::mat& s_orig_mat, const arma::mat& v_mat, const arma::mat& l_mat, const arma::mat& a_mat, NumericVector& U_3d, const arma::mat& posterior_weights, bool common_cov, int report_type, int n_thread, int n_samples, int seed);
+RcppExport SEXP _mashr_calc_post_rcpp(SEXP b_matSEXP, SEXP s_matSEXP, SEXP s_alpha_matSEXP, SEXP s_orig_matSEXP, SEXP v_matSEXP, SEXP l_matSEXP, SEXP a_matSEXP, SEXP U_3dSEXP, SEXP posterior_weightsSEXP, SEXP common_covSEXP, SEXP report_typeSEXP, SEXP n_threadSEXP, SEXP n_samplesSEXP, SEXP seedSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -105,7 +105,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type common_cov(common_covSEXP);
     Rcpp::traits::input_parameter< int >::type report_type(report_typeSEXP);
     Rcpp::traits::input_parameter< int >::type n_thread(n_threadSEXP);
-    rcpp_result_gen = Rcpp::wrap(calc_post_rcpp(b_mat, s_mat, s_alpha_mat, s_orig_mat, v_mat, l_mat, a_mat, U_3d, posterior_weights, common_cov, report_type, n_thread));
+    Rcpp::traits::input_parameter< int >::type n_samples(n_samplesSEXP);
+    Rcpp::traits::input_parameter< int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(calc_post_rcpp(b_mat, s_mat, s_alpha_mat, s_orig_mat, v_mat, l_mat, a_mat, U_3d, posterior_weights, common_cov, report_type, n_thread, n_samples, seed));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -153,7 +155,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_mashr_inv_chol_tri_rcpp", (DL_FUNC) &_mashr_inv_chol_tri_rcpp, 1},
     {"_mashr_calc_lik_rcpp", (DL_FUNC) &_mashr_calc_lik_rcpp, 9},
     {"_mashr_calc_lik_precomputed_rcpp", (DL_FUNC) &_mashr_calc_lik_precomputed_rcpp, 5},
-    {"_mashr_calc_post_rcpp", (DL_FUNC) &_mashr_calc_post_rcpp, 12},
+    {"_mashr_calc_post_rcpp", (DL_FUNC) &_mashr_calc_post_rcpp, 14},
     {"_mashr_calc_sermix_rcpp", (DL_FUNC) &_mashr_calc_sermix_rcpp, 11},
     {"_mashr_fit_teem_rcpp", (DL_FUNC) &_mashr_fit_teem_rcpp, 7},
     {NULL, NULL, 0}
